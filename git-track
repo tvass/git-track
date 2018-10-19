@@ -1,0 +1,270 @@
+#!/usr/bin/env python
+"""
+A simple GPX files manager using Git.
+"""
+
+import os
+import argparse as mod_argparse
+import gpxpy as mod_gpxpy
+from beautifultable import BeautifulTable
+import glob
+import git
+import uuid
+from xml.etree import ElementTree
+import datetime
+from shutil import copyfile
+
+
+REPO_PATH = '.'
+KM_TO_MILES = 0.621371
+M_TO_FEET = 3.28084
+
+
+def format_time(time_s):
+    if not time_s:
+        return 'n/a'
+    elif args.seconds:
+        return str(int(time_s))
+    else:
+        minutes = mod_math.floor(time_s / 60.)
+        hours = mod_math.floor(minutes / 60.)
+        return '%s:%s:%s' % (str(int(hours)).zfill(2), str(int(minutes % 60)).zfill(2), str(int(time_s % 60)).zfill(2))
+
+
+def format_long_length(length):
+    if args.miles:
+        return '{:.3f}miles'.format(length / 1000. * KM_TO_MILES)
+    else:
+        return '{:.3f}km'.format(length / 1000.)
+
+
+def format_short_length(length):
+    if args.miles:
+        return '{:.2f}ft'.format(length * M_TO_FEET)
+    else:
+        return '{:.2f}m'.format(length)
+
+
+def format_speed(speed):
+    if not speed:
+        speed = 0
+    if args.miles:
+        return '{:.2f}mph'.format(speed * KM_TO_MILES * 3600. / 1000.)
+    else:
+        return '{:.2f}m/s = {:.2f}km/h'.format(speed, speed * 3600. / 1000.)
+
+
+def get_gpx_distance(gpx_part):
+    length_2d = gpx_part.length_3d()
+    return length_2d
+
+
+def get_gpx_info(gpx):
+    length_2d = gpx.length_2d()
+    length_3d = gpx.length_3d()
+    moving_time, stopped_time, moving_distance, stopped_distance, max_speed = gpx.get_moving_data()
+    uphill, downhill = gpx.get_uphill_downhill()
+    start_time, end_time = gpx.get_time_bounds()
+    avg_speed = (moving_distance / moving_time)
+    points_no = len(list(gpx.walk(only_points=True)))
+    if points_no > 0:
+        distances = []
+        previous_point = None
+        for point in gpx.walk(only_points=True):
+            if previous_point:
+                distance = point.distance_2d(previous_point)
+                distances.append(distance)
+            previous_point = point
+    return str(start_time.date()),  format_short_length(uphill), format_speed(moving_distance / moving_time), format_speed(max_speed), format_long_length(length_2d)
+
+
+def work_in_progress():
+    print ('to do !')
+
+
+def gitCheck():
+    if os.path.exists(REPO_PATH + '/.git'):
+        return True
+    else:
+        print('No git repo found, please use "git track init" first.')
+        return False
+
+
+def gitInit():
+    dirs = ['/.cache', '/tracks']
+    for dir in dirs:
+        if os.path.exists(REPO_PATH + dir) is not True:
+            os.mkdir(REPO_PATH + dir)
+            print('Creating ... %s' % dir)
+
+    if os.path.exists(REPO_PATH + '/.git') is not True:
+        print('Init Git repository in "%s"' % REPO_PATH)
+        git.Repo.init(REPO_PATH)
+
+
+def gpxAdd(gpx_files):
+    if gitCheck():
+        # if not gpx_files:
+        #     gpx_files = glob.glob("./gpx/*.gpx")
+
+        for gpx_file in gpx_files:
+            repo = git.Repo('.')
+            try:
+                values = []
+                gpxfile = open(gpx_file, 'r')
+                gpx = mod_gpxpy.parse(gpxfile)
+                date, uphill,  avg_speed, max_speed, distance = get_gpx_info(gpx)
+                values.append([date, uphill,  avg_speed, max_speed, distance])
+                gpxPrint(None, values, None, 0)
+                output_filename = 'tracks/' + \
+                    str(uuid.uuid1()) + '-' + \
+                    datetime.datetime.utcnow().strftime("%Y-%m-%d-%H%MZ") + '.gpx'
+
+                copyfile(gpx_file, output_filename)
+                repo.git.add(output_filename)
+                repo.git.commit(m='Adding track %s as %s' % (gpx_file, output_filename))
+            except Exception as e:
+                print('Error processing %s' % gpx_file)
+            finally:
+                gpxfile.close()
+
+
+def gpxDel(gpx_files):
+    if gitCheck():
+        for gpx_file in gpx_files:
+            if os.path.exists(REPO_PATH + '/' + gpx_file) is True:
+                repo = git.Repo(REPO_PATH)
+                try:
+                    os.system("git rm " + gpx_file)
+                    print('la')
+                    repo.git.commit(m='Delete track %s' % gpx_file)
+                except Exception as e:
+                    print('Error processing %s' % gpx_file)
+
+
+def gpxDescribe():
+    work_in_progress()
+
+
+def gpxShow(limit=10, filter=None):
+    if gitCheck():
+        gpx_files = glob.glob('tracks/*.gpx')
+        values = []
+        for gpx_file in gpx_files:
+            try:
+                gpxfile = open(gpx_file, 'r')
+                gpx = mod_gpxpy.parse(gpxfile)
+                date, uphill,  avg_speed, max_speed, distance = get_gpx_info(gpx)
+                values.append([date, uphill,  avg_speed, max_speed, distance])
+            except Exception as e:
+                print('Error processing %s' % gpx_file)
+            finally:
+                gpxfile.close()
+        gpxPrint(None, values, None, limit)
+
+
+def gpxPrint(headers=["Date", "D+", "AVG Speed", "MAX Speed", "Length"], values=[], sort='Date', limit=10):
+    table = BeautifulTable()
+    table.column_headers = ["Date", "D+", "AVG Speed", "MAX Speed", "Length"]
+    table_row = 0
+    for value in values:
+        table_row = table_row + 1
+        table.append_row(value)
+
+    table.sort('Date', reverse=True)
+    if int(limit) > 0 and int(limit) < table_row:
+        print ('Output limited to %s track(s). Use --limit 0 to show all.\n' % limit)
+        for i in list(reversed(range(int(limit), table_row, 1))):
+            table.pop_row(int(i))
+
+    print(table)
+
+
+def gpxStatus():
+    if gitCheck():
+        gpx_files = []
+        repo = git.Repo(REPO_PATH)
+        for commit in list(repo.iter_commits()):
+            for item in commit.stats.files.items():
+                gpx_files.append(str(next(iter(item))))
+        print ('Number of track(s): %s' % len(gpx_files))
+
+
+def gpxUpdate(gpx_files, tag):
+    if gitCheck():
+        for gpx_file in gpx_files:
+            # try:
+            import xml.etree.ElementTree as ET
+            ET.register_namespace('', "http://www.topografix.com/GPX/1/1")
+            tree = ET.parse(gpx_file)
+            root = tree.getroot()
+
+            metadata = root.find('{http://www.topografix.com/GPX/1/1}metadata')
+            if metadata:
+                print ('Found <metadata>  for %s' % gpx_file)
+            else:
+                metadata = ElementTree.Element("metadata")
+                root.insert(0, metadata)
+                print ('Adding <metadata> for %s' % gpx_file)
+
+            extensions = metadata.find('{http://www.topografix.com/GPX/1/1}extensions')
+            if extensions:
+                print ('Found <extensions> in <metadata> for %s' % gpx_file)
+            else:
+                extensions = ElementTree.Element("extensions")
+                metadata.insert(0, extensions)
+                print ('Adding <extensions> in <metadata> for %s' % gpx_file)
+
+            tags = ElementTree.Element("gittrack:tags")
+            tags.text = tag
+
+            extensions.insert(0, tags)
+            tree.write(open(gpx_file, 'w+'), encoding='unicode', xml_declaration=True)
+
+
+def make_parser():
+    acts = ['init', 'add', 'status', 'show', 'describe', 'update', 'delete']
+    parser = mod_argparse.ArgumentParser(
+        formatter_class=mod_argparse.RawTextHelpFormatter,
+        description=__doc__,
+        usage='\n %(prog)s init\n %(prog)s add /path/to/file1.gpx  /path/to/file2.gpx ... [--tag TAG]\n %(prog)s update tracks/file1.gpx tracks/file2.gpx ... [--tag TAG]\n %(prog)s status\n %(prog)s show [--limit N][--filter YYYY-MM-DD]\n %(prog)s describe file1.gpx file2.gpx ...\n %(prog)s delete tracks/file1.gpx tracks/file2.gpx ...'
+    )
+    parser.add_argument('-s', '--seconds', action='store_true',
+                        help='print times as N seconds, rather than HH:MM:SS')
+    parser.add_argument('-m', '--miles', action='store_true',
+                        help='print distances and speeds using miles and feet (default is KM)')
+    parser.add_argument('-t', '--tag', action='store', default=None,
+                        help='add tag in metadata')
+    parser.add_argument('-l', '--limit', action='store', default=10,
+                        help='limit output to N track(s). Default is 10. Use 0 for unlimited.')
+    parser.add_argument('-f', '--filter', action='store', default=None,
+                        help='filter output by date regexp')
+    parser.add_argument('action', action='store', default=None, nargs='+')
+    return parser
+
+if __name__ == '__main__':
+    args, argz = make_parser().parse_known_args()
+    if args.action[0] == "init" and len(args.action) == 1:
+        gitInit()
+    elif args.action[0] == "add":
+        if len(args.action) > 1:
+            args.action.remove("add")
+            gpxAdd(args.action)
+        else:
+            print ('git track -h for help\ngit track add /path/to/filename1.gpx /path/to/filename2.gpx ...')
+    elif args.action[0] == "delete":
+        if len(args.action) > 1:
+            args.action.remove("delete")
+            gpxDel(args.action)
+        else:
+            print ('git track -h for help\ngit track delete tracks/filename1.gpx tracks/filename2.gpx ...')
+    elif args.action[0] == "status":
+        gpxStatus()
+    elif args.action[0] == "show":
+        gpxShow(args.limit, args.filter)
+    elif args.action[0] == "update":
+        if len(args.action) > 1 and args.tag is not None:
+            args.action.remove("update")
+            gpxUpdate(args.action, args.tag)
+        else:
+            print ('Missing args ! Add - h for help !\n\nUsage for UPDATE: \ngit track update tracks/2018-10-13-1217Z-ec4c77aa.gpx --tag hike --description "Cascade Mountain with Gen"\n')
